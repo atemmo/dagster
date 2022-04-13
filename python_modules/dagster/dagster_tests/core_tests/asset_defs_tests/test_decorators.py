@@ -11,9 +11,10 @@ from dagster import (
     String,
     build_op_context,
     check,
+    op,
 )
 from dagster.core.asset_defs import AssetIn, AssetsDefinition, asset, build_assets_job, multi_asset
-from dagster.core.asset_defs.decorators import ASSET_DEPENDENCY_METADATA_KEY
+from dagster.core.asset_defs.decorators import ASSET_DEPENDENCY_METADATA_KEY, assets_definition
 from dagster.utils.backcompat import ExperimentalWarning
 
 
@@ -325,3 +326,16 @@ def test_invoking_asset_with_context():
     ctx = build_op_context()
     out = asset_with_context(ctx, 1)
     assert out == 1
+
+
+def test_asset_definition_decorator():
+    @assets_definition(
+        asset_key_by_output_name={"a": AssetKey("a_asset"), "b": AssetKey("b_asset")}
+    )
+    @op(out={"a": Out(), "b": Out()})
+    def multi_asset_op(context):
+        yield Output(1, "a")
+        yield Output(2, "b")
+
+    ctx = build_op_context()
+    multi_asset_op(ctx)

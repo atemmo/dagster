@@ -19,6 +19,7 @@ from dagster.builtins import Nothing
 from dagster.config import Field
 from dagster.core.decorator_utils import get_function_params, get_valid_name_permutations
 from dagster.core.definitions.decorators.op_decorator import _Op
+from dagster.core.definitions import OpDefinition
 from dagster.core.definitions.events import AssetKey
 from dagster.core.definitions.input import In
 from dagster.core.definitions.output import Out
@@ -296,6 +297,73 @@ def multi_asset(
             },
             op=op,
             asset_deps=internal_asset_deps or None,
+        )
+
+    return inner
+
+
+@experimental_decorator
+def assets_definition(
+    name: Optional[str] = None,
+    asset_key_by_input_name: Optional[Mapping[str, AssetKey]] = None,
+    asset_key_by_output_name: Optional[Mapping[str, AssetKey]] = None,
+    non_argument_deps: Optional[Set[AssetKey]] = None,
+    description: Optional[str] = None,
+    required_resource_keys: Optional[Set[str]] = None,
+    compute_kind: Optional[str] = None,
+    internal_asset_deps: Optional[Mapping[str, Set[AssetKey]]] = None,
+) -> Callable[[Callable[..., Any]], AssetsDefinition]:
+    """Create a combined definition of multiple assets that are computed using the same op and same
+    upstream assets.
+
+    Each argument to the decorated function references an upstream asset that this asset depends on.
+    The name of the argument designates the name of the upstream asset.
+
+    Args:
+        name (Optional[str]): The name of the op.
+        outs: (Optional[Dict[str, Out]]): The Outs representing the produced assets.
+        ins (Optional[Mapping[str, AssetIn]]): A dictionary that maps input names to their metadata
+            and namespaces.
+        non_argument_deps (Optional[Set[AssetKey]]): Set of asset keys that are upstream dependencies,
+            but do not pass an input to the multi_asset.
+        required_resource_keys (Optional[Set[str]]): Set of resource handles required by the op.
+        io_manager_key (Optional[str]): The resource key of the IOManager used for storing the
+            output of the op as an asset, and for loading it in downstream ops
+            (default: "io_manager").
+        compute_kind (Optional[str]): A string to represent the kind of computation that produces
+            the asset, e.g. "dbt" or "spark". It will be displayed in Dagit as a badge on the asset.
+        internal_asset_deps (Optional[Mapping[str, Set[AssetKey]]]): By default, it is assumed
+            that all assets produced by a multi_asset depend on all assets that are consumed by that
+            multi asset. If this default is not correct, you pass in a map of output names to a
+            corrected set of AssetKeys that they depend on. Any AssetKeys in this list must be either
+            used as input to the asset or produced within the op.
+    """
+
+    internal_asset_deps = check.opt_dict_param(
+        internal_asset_deps, "internal_asset_deps", key_type=str, value_type=set
+    )
+
+    def inner(op_def: OpDefinition) -> AssetsDefinition:
+        ins = op_def.ins
+        outs = op_def.outs
+
+        asset_ins = build_asset_ins(
+            op_def.compute_fn.decorated_fn, None, ins or {}, non_argument_deps
+        )
+        asset_outs = build_asset_outs(op_def.name, outs, asset_ins, internal_asset_deps or {})
+
+        # NOTE: we can `cast` below because we know the Ins returned by `build_asset_ins` always
+        # have a plain AssetKey asset key. Dynamic asset keys will be deprecated in 0.15.0, when
+        # they are gone we can remove this cast.
+        return AssetsDefinition(
+            input_names_by_asset_key={
+                cast(AssetKey, in_def.asset_key): input_name
+                for input_name, in_def in asset_ins.items()
+            },
+            output_names_by_asset_key={
+                cast(AssetKey, out_def.asset_key): output_name for output_name, out_def in asset_outs.items()  # type: ignore
+            },
+            op=op_def,
         )
 
     return inner
