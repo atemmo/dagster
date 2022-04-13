@@ -1,9 +1,9 @@
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Mapping
 
 import pandas
 from dagster_dbt import DbtOutput
 
-from dagster import AssetKey, AssetMaterialization, MetadataEntry
+from dagster import AssetKey, AssetMaterialization, MetadataValue
 
 from .snowflake_io_manager import connect_snowflake
 
@@ -22,10 +22,8 @@ class DbtAssetResource:
     def __init__(self, asset_key_prefix: List[str]):
         self._asset_key_prefix = asset_key_prefix
 
-    def _get_metadata(self, result: Dict[str, Any]) -> List[MetadataEntry]:
-        return [
-            MetadataEntry.float(value=result["execution_time"], label="Execution Time (seconds)")
-        ]
+    def _get_metadata(self, result: Dict[str, Any]) -> Mapping[str, Any]:
+        return {"Execution Time (seconds)": result["execution_time"]}
 
     def get_asset_materializations(self, dbt_output: DbtOutput) -> List[AssetMaterialization]:
         ret = []
@@ -46,7 +44,7 @@ class DbtAssetResource:
             ret.append(
                 AssetMaterialization(
                     description=f"dbt node: {unique_id}",
-                    metadata_entries=self._get_metadata(result),
+                    metadata=self._get_metadata(result),
                     asset_key=asset_key,
                 )
             )
@@ -68,7 +66,7 @@ class SnowflakeQueryDbtAssetResource(DbtAssetResource):
         self._dbt_schema = dbt_schema
         super().__init__(asset_key_prefix=["snowflake", dbt_schema])
 
-    def _get_metadata(self, result: Dict[str, Any]) -> List[MetadataEntry]:
+    def _get_metadata(self, result: Dict[str, Any]) -> Mapping[str, Any]:
         """
         Here, we run queries against our output Snowflake database tables to add additional context
         to our asset materializations.
@@ -80,7 +78,8 @@ class SnowflakeQueryDbtAssetResource(DbtAssetResource):
             sample_rows = pandas.read_sql_query(
                 f"SELECT * FROM {table_name} SAMPLE ROW (10 rows)", con
             )
-        return super()._get_metadata(result) + [
-            MetadataEntry.int(int(n_rows.iloc[0][0]), "dbt Model Number of Rows"),
-            MetadataEntry.md(sample_rows.astype("str").to_markdown(), "dbt Model Sample Rows"),
-        ]
+        return {
+            **super()._get_metadata(result),
+            "dbt Model Number of Rows": int(n_rows.iloc[0][0]),
+            "dbt Model Sample Rows": MetadataValue.md(sample_rows.astype("str").to_markdown()),
+        }
