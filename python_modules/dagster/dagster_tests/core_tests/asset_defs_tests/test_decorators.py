@@ -14,6 +14,7 @@ from dagster import (
     check,
     op,
     In,
+    resource,
 )
 from dagster.core.asset_defs import AssetIn, AssetsDefinition, asset, build_assets_job, multi_asset
 from dagster.core.asset_defs.decorators import ASSET_DEPENDENCY_METADATA_KEY, assets_definition
@@ -400,3 +401,19 @@ def test_default_assets_and_op_definition():
 
     assert input_def_by_asset_key == {}
     assert output_def_by_asset_key[AssetKey("result_asset")].name == "result"
+
+
+def test_assets_definition_errors_when_not_op_decorated():
+    with pytest.raises(Exception):
+
+        @assets_definition
+        @resource
+        def my_op():
+            return 5, 6
+
+    with pytest.raises(Exception):
+
+        @assets_definition(asset_key_by_output_name={"result": AssetKey("result_asset")})
+        @resource
+        def my_op():
+            return 5, 6

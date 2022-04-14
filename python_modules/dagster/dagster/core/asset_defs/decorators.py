@@ -338,6 +338,10 @@ def assets_definition(
     )
 
     if callable(name):
+        check.invariant(
+            isinstance(name, OpDefinition),
+            "assets_definition decorator can only be applied to an OpDefinition",
+        )
         op_def = name
         return AssetsDefinition(
             asset_key_by_input_name=_infer_asset_key_by_input_name(
@@ -351,6 +355,10 @@ def assets_definition(
         )
 
     def inner(op_def: OpDefinition) -> AssetsDefinition:
+        check.invariant(
+            isinstance(op_def, OpDefinition),
+            "assets_definition decorator can only be applied to an OpDefinition",
+        )
         return AssetsDefinition(
             asset_key_by_input_name=_infer_asset_key_by_input_name(
                 op_def,
