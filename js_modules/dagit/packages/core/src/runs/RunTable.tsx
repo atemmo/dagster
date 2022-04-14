@@ -148,6 +148,7 @@ export const RUN_TABLE_RUN_FRAGMENT = gql`
     canTerminate
     mode
     rootRunId
+    runConfigYaml
     parentRunId
     pipelineSnapshotId
     pipelineName

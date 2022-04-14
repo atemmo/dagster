@@ -23,6 +23,7 @@ import {useRepositoryForRun} from '../workspace/useRepositoryForRun';
 import {workspacePathFromRunDetails} from '../workspace/workspacePath';
 
 import {DeletionDialog} from './DeletionDialog';
+import {ReexecutionDialog} from './ReexecutionDialog';
 import {RUN_FRAGMENT_FOR_REPOSITORY_MATCH} from './RunFragments';
 import {doneStatuses} from './RunStatuses';
 import {
@@ -199,8 +200,14 @@ export const RunBulkActionsMenu: React.FC<{
   clearSelection: () => void;
 }> = React.memo(({selected, clearSelection}) => {
   const {refetch} = React.useContext(RunsQueryRefetchContext);
-  const {canTerminatePipelineExecution, canDeletePipelineRun} = usePermissions();
-  const [visibleDialog, setVisibleDialog] = React.useState<'none' | 'terminate' | 'delete'>('none');
+  const {
+    canTerminatePipelineExecution,
+    canDeletePipelineRun,
+    canLaunchPipelineReexecution,
+  } = usePermissions();
+  const [visibleDialog, setVisibleDialog] = React.useState<
+    'none' | 'terminate' | 'delete' | 'reexecute'
+  >('none');
 
   if (!canTerminatePipelineExecution && !canDeletePipelineRun) {
     return null;
@@ -215,6 +222,8 @@ export const RunBulkActionsMenu: React.FC<{
 
   const selectedIDs = selected.map((run) => run.runId);
   const deletionMap = selected.reduce((accum, run) => ({...accum, [run.id]: run.canTerminate}), {});
+
+  const reexecutionMap = selected.reduce((accum, run) => ({...accum, [run.id]: run}), {});
 
   const closeDialogs = () => {
     setVisibleDialog('none');
@@ -253,6 +262,18 @@ export const RunBulkActionsMenu: React.FC<{
                 }}
               />
             ) : null}
+            {canLaunchPipelineReexecution ? (
+              <MenuItem
+                icon="refresh"
+                text={`Re-execute ${selectedIDs.length} ${
+                  selectedIDs.length === 1 ? 'run' : 'runs'
+                }`}
+                disabled={selectedIDs.length === 0}
+                onClick={() => {
+                  setVisibleDialog('reexecute');
+                }}
+              />
+            ) : null}
           </Menu>
         }
         position="bottom-right"
@@ -273,6 +294,12 @@ export const RunBulkActionsMenu: React.FC<{
         onComplete={onComplete}
         onTerminateInstead={() => setVisibleDialog('terminate')}
         selectedRuns={deletionMap}
+      />
+      <ReexecutionDialog
+        isOpen={visibleDialog === 'reexecute'}
+        onClose={closeDialogs}
+        onComplete={onComplete}
+        selectedRuns={reexecutionMap}
       />
     </>
   );

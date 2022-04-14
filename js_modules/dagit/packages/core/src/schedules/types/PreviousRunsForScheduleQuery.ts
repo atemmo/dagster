@@ -31,6 +31,7 @@ export interface PreviousRunsForScheduleQuery_pipelineRunsOrError_Runs_results {
   canTerminate: boolean;
   mode: string;
   rootRunId: string | null;
+  runConfigYaml: string;
   parentRunId: string | null;
   pipelineSnapshotId: string | null;
   pipelineName: string;

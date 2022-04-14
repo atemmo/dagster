@@ -10,15 +10,11 @@ type MatchType = {
   type: 'origin-and-snapshot' | 'origin-only' | 'snapshot-only' | 'pipeline-name-only';
 };
 
-/**
- * Given a Run fragment, find the repository that contains its pipeline.
- */
-export const useRepositoryForRun = (
+const findRepositoryMatchForRun = (
   run: RunFragmentForRepositoryMatch | null | undefined,
+  options: DagsterRepoOption[],
 ): MatchType | null => {
-  const {options} = useRepositoryOptions();
-
-  const repoMatch = React.useMemo(() => {
+  const findRepoMatch = () => {
     if (!run) {
       return null;
     }
@@ -40,9 +36,9 @@ export const useRepositoryForRun = (
 
     // The origin repo is loaded. Verify that a pipeline with this name exists and return the match if so.
     return match && repoContainsPipeline(match, pipelineName) ? match : null;
-  }, [options, run]);
+  };
 
-  const snapshotMatches = React.useMemo(() => {
+  const findSnapshotMatches = () => {
     if (!run) {
       return null;
     }
@@ -59,9 +55,9 @@ export const useRepositoryForRun = (
     }
 
     return null;
-  }, [options, run]);
+  };
 
-  const pipelineNameMatches = React.useMemo(() => {
+  const findPipelineNameMatches = () => {
     if (!run) {
       return null;
     }
@@ -71,7 +67,11 @@ export const useRepositoryForRun = (
     // There is no origin repo. Find any repos that might contain a matching pipeline name.
     const possibleMatches = findRepoContainingPipeline(options, pipelineName);
     return possibleMatches.length ? possibleMatches : null;
-  }, [options, run]);
+  };
+
+  const repoMatch = findRepoMatch();
+  const snapshotMatches = findSnapshotMatches();
+  const pipelineNameMatches = findPipelineNameMatches();
 
   if (repoMatch) {
     if (snapshotMatches) {
@@ -97,4 +97,27 @@ export const useRepositoryForRun = (
   }
 
   return null;
+};
+
+/**
+ * Given a Run fragment, find the repository that contains its pipeline.
+ */
+export const useRepositoryForRun = (
+  run: RunFragmentForRepositoryMatch | null | undefined,
+): MatchType | null => {
+  const {options} = useRepositoryOptions();
+  return React.useMemo(() => findRepositoryMatchForRun(run, options), [run, options]);
+};
+
+export const useRepositoriesForRuns = (runs: {
+  [runId: string]: RunFragmentForRepositoryMatch | null | undefined;
+}): {[runId: string]: MatchType | null} => {
+  const {options} = useRepositoryOptions();
+  return React.useMemo(() => {
+    const matches: {[runId: string]: MatchType | null} = {};
+    for (const runId in runs) {
+      matches[runId] = findRepositoryMatchForRun(runs[runId], options);
+    }
+    return matches;
+  }, [options, runs]);
 };
