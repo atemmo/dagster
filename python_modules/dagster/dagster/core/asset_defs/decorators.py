@@ -12,6 +12,7 @@ from typing import (
     cast,
     overload,
     Tuple,
+    List,
 )
 
 from dagster import check
@@ -307,10 +308,6 @@ def assets_definition(
     name: Optional[str] = None,
     asset_key_by_input_name: Optional[Mapping[str, AssetKey]] = None,
     asset_key_by_output_name: Optional[Mapping[str, AssetKey]] = None,
-    non_argument_deps: Optional[Set[AssetKey]] = None,
-    description: Optional[str] = None,
-    required_resource_keys: Optional[Set[str]] = None,
-    compute_kind: Optional[str] = None,
     internal_asset_deps: Optional[Mapping[str, Set[AssetKey]]] = None,
 ) -> Callable[[Callable[..., Any]], AssetsDefinition]:
     """Create a combined definition of multiple assets that are computed using the same op and same
@@ -324,49 +321,103 @@ def assets_definition(
         outs: (Optional[Dict[str, Out]]): The Outs representing the produced assets.
         ins (Optional[Mapping[str, AssetIn]]): A dictionary that maps input names to their metadata
             and namespaces.
-        non_argument_deps (Optional[Set[AssetKey]]): Set of asset keys that are upstream dependencies,
-            but do not pass an input to the multi_asset.
-        required_resource_keys (Optional[Set[str]]): Set of resource handles required by the op.
-        io_manager_key (Optional[str]): The resource key of the IOManager used for storing the
-            output of the op as an asset, and for loading it in downstream ops
-            (default: "io_manager").
-        compute_kind (Optional[str]): A string to represent the kind of computation that produces
-            the asset, e.g. "dbt" or "spark". It will be displayed in Dagit as a badge on the asset.
         internal_asset_deps (Optional[Mapping[str, Set[AssetKey]]]): By default, it is assumed
             that all assets produced by a multi_asset depend on all assets that are consumed by that
             multi asset. If this default is not correct, you pass in a map of output names to a
             corrected set of AssetKeys that they depend on. Any AssetKeys in this list must be either
             used as input to the asset or produced within the op.
     """
-
+    asset_key_by_input_name = check.opt_dict_param(
+        asset_key_by_input_name, "asset_key_by_input_name", key_type=str, value_type=AssetKey
+    )
+    asset_key_by_output_name = check.opt_dict_param(
+        asset_key_by_output_name, "asset_key_by_output_name", key_type=str, value_type=AssetKey
+    )
     internal_asset_deps = check.opt_dict_param(
         internal_asset_deps, "internal_asset_deps", key_type=str, value_type=set
     )
 
-    def inner(op_def: OpDefinition) -> AssetsDefinition:
-        ins = op_def.ins
-        outs = op_def.outs
-
-        asset_ins = build_asset_ins(
-            op_def.compute_fn.decorated_fn, None, ins or {}, non_argument_deps
-        )
-        asset_outs = build_asset_outs(op_def.name, outs, asset_ins, internal_asset_deps or {})
-
-        # NOTE: we can `cast` below because we know the Ins returned by `build_asset_ins` always
-        # have a plain AssetKey asset key. Dynamic asset keys will be deprecated in 0.15.0, when
-        # they are gone we can remove this cast.
+    if callable(name):
+        op_def = name
         return AssetsDefinition(
-            input_names_by_asset_key={
-                cast(AssetKey, in_def.asset_key): input_name
-                for input_name, in_def in asset_ins.items()
-            },
-            output_names_by_asset_key={
-                cast(AssetKey, out_def.asset_key): output_name for output_name, out_def in asset_outs.items()  # type: ignore
-            },
+            asset_key_by_input_name=_infer_asset_key_by_input_name(
+                op_def,
+                asset_key_by_input_name,
+            ),
+            asset_key_by_output_name=_infer_asset_key_by_output_name(
+                op_def, asset_key_by_output_name
+            ),
             op=op_def,
         )
 
+    def inner(op_def: OpDefinition) -> AssetsDefinition:
+        return AssetsDefinition(
+            asset_key_by_input_name=_infer_asset_key_by_input_name(
+                op_def,
+                asset_key_by_input_name,
+            ),
+            asset_key_by_output_name=_infer_asset_key_by_output_name(
+                op_def, asset_key_by_output_name
+            ),
+            op=op_def,
+            asset_deps=internal_asset_deps or None,
+        )
+
     return inner
+
+
+def _get_input_param_names(fn_params: List[str]) -> List[str]:
+    is_context_provided = len(fn_params) > 0 and fn_params[0].name in get_valid_name_permutations(
+        "context"
+    )
+    return [
+        input_param.name for input_param in (fn_params[1:] if is_context_provided else fn_params)
+    ]
+
+
+def _infer_asset_key_by_input_name(
+    op_def: OpDefinition, asset_key_by_input_name: Dict[str, AssetKey]
+) -> Dict[str, AssetKey]:
+    # Infer non-argument deps for inputs with type In(nothing) with AssetKey(input_name)
+
+    params = get_function_params(op_def.compute_fn.decorated_fn)
+    input_param_names = _get_input_param_names(params)
+
+    for in_key in asset_key_by_input_name.keys():
+        if in_key not in input_param_names:
+            raise DagsterInvalidDefinitionError(
+                f"Key '{in_key}' in provided asset_key_by_input_name dict does not correspond to "
+                "any key provided in the ins dictionary of the decorated op or any argument "
+                "to the decorated function"
+            )
+
+    all_input_names = set(input_param_names) | op_def.ins.keys()
+    # If asset key is not supplied in asset_key_by_input_name, create asset key
+    # from input name
+    inferred_asset_key_by_input_name: Dict[str, AssetKey] = {
+        input_name: asset_key_by_input_name.get(input_name, AssetKey([input_name]))
+        for input_name in all_input_names
+    }
+
+    return inferred_asset_key_by_input_name
+
+
+def _infer_asset_key_by_output_name(op_def, asset_key_by_output_name):
+    inferred_asset_key_by_output_name: Dict[str, AssetKey] = asset_key_by_output_name.copy()
+    op_outs = op_def.outs
+
+    for output_name, asset_key in asset_key_by_output_name.items():
+        if output_name not in op_outs:
+            raise DagsterInvalidDefinitionError(
+                f"Key {output_name} in provided asset_key_by_output_name does not correspond "
+                "to any key provided in the out dictionary of the decorated op"
+            )
+
+    for key in op_outs:
+        if key not in inferred_asset_key_by_output_name:
+            inferred_asset_key_by_output_name[key] = AssetKey([key])
+
+    return inferred_asset_key_by_output_name
 
 
 def build_asset_outs(
@@ -402,12 +453,7 @@ def build_asset_ins(
     non_argument_deps = check.opt_set_param(non_argument_deps, "non_argument_deps", AssetKey)
 
     params = get_function_params(fn)
-    is_context_provided = len(params) > 0 and params[0].name in get_valid_name_permutations(
-        "context"
-    )
-    input_param_names = [
-        input_param.name for input_param in (params[1:] if is_context_provided else params)
-    ]
+    input_param_names = _get_input_param_names(params)
 
     all_input_names = set(input_param_names) | asset_ins.keys()
 
