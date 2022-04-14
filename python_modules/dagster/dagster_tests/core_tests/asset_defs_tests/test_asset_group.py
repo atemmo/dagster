@@ -20,10 +20,7 @@ from dagster import (
     resource,
 )
 from dagster.core.asset_defs import AssetGroup, AssetIn, SourceAsset, asset, multi_asset
-from dagster.core.errors import (
-    DagsterUnmetExecutorRequirementsError,
-    DagsterUnresolvedAssetDependencyError,
-)
+from dagster.core.errors import DagsterUnmetExecutorRequirementsError
 
 
 @pytest.fixture(autouse=True)
@@ -599,29 +596,8 @@ def test_assets_prefixed_internal_dep():
     assert result[1].dependency_asset_keys == {AssetKey(["my_prefix", "asset1"])}
 
 
-def test_assets_prefixed_external_dep():
-    @asset
-    def asset1():
-        ...
-
-    upstream_group = AssetGroup([asset1]).prefixed("upstream_prefix")
-
-    @asset
-    def asset2(asset1):
-        del asset1
-
-    result = AssetGroup([asset2]).prefixed("my_prefix", upstream_groups=[upstream_group]).assets
-    assert len(result) == 1
-    assert result[0].asset_key == AssetKey(["my_prefix", "asset2"])
-    assert result[0].dependency_asset_keys == {AssetKey(["upstream_prefix", "asset1"])}
-
-
 def test_assets_prefixed_disambiguate():
-    @asset(name="apple")
-    def asset1():
-        ...
-
-    upstream_group = AssetGroup([asset1]).prefixed("core")
+    asset1 = SourceAsset(AssetKey(["core", "apple"]))
 
     @asset(name="apple")
     def asset2():
@@ -631,19 +607,25 @@ def test_assets_prefixed_disambiguate():
     def orange(apple):
         del apple
 
+    @asset
+    def banana(apple):
+        del apple
+
     result = (
-        AssetGroup([asset2, orange]).prefixed("my_prefix", upstream_groups=[upstream_group]).assets
+        AssetGroup([asset2, orange, banana], source_assets=[asset1]).prefixed("my_prefix").assets
     )
-    assert len(result) == 2
+    assert len(result) == 3
     assert result[0].asset_key == AssetKey(["my_prefix", "apple"])
     assert result[1].asset_key == AssetKey(["my_prefix", "orange"])
     assert result[1].dependency_asset_keys == {AssetKey(["core", "apple"])}
+    assert result[2].asset_key == AssetKey(["my_prefix", "banana"])
+    assert result[2].dependency_asset_keys == {AssetKey(["my_prefix", "apple"])}
 
 
 def test_assets_prefixed_source_asset():
     asset1 = SourceAsset(key=AssetKey(["upstream_prefix", "asset1"]))
 
-    @asset
+    @asset(ins={"asset1": AssetIn(namespace="upstream_prefix")})
     def asset2(asset1):
         del asset1
 
@@ -653,41 +635,11 @@ def test_assets_prefixed_source_asset():
     assert result[0].dependency_asset_keys == {AssetKey(["upstream_prefix", "asset1"])}
 
 
-def test_assets_prefixed_multiple_matches():
-    @asset(name="apple")
-    def asset1():
-        ...
-
-    upstream_group = AssetGroup([asset1]).prefixed("core")
-
-    @asset(name="apple")
-    def asset2():
-        ...
-
-    @asset
-    def orange(apple):
-        del apple
-
-    with pytest.raises(
-        DagsterUnresolvedAssetDependencyError,
-        match=re.escape(
-            'Could not resolve dependency asset key ["apple"] for asset ["orange"]. Multiple '
-            'matching assets found: [\'["my_prefix", "apple"]\', \'["core", "apple"]\'].'
-        ),
-    ):
-        AssetGroup([asset2, orange]).prefixed("my_prefix", upstream_groups=[upstream_group])
-
-
 def test_assets_prefixed_no_matches():
     @asset
     def orange(apple):
         del apple
 
-    with pytest.raises(
-        DagsterUnresolvedAssetDependencyError,
-        match=re.escape(
-            'Could not resolve dependency asset key ["apple"] for asset ["orange"]. No matching '
-            "assets found."
-        ),
-    ):
-        AssetGroup([orange]).prefixed("my_prefix")
+    result = AssetGroup([orange]).prefixed("my_prefix").assets
+    assert result[0].asset_key == AssetKey(["my_prefix", "orange"])
+    assert result[0].dependency_asset_keys == {AssetKey("apple")}
